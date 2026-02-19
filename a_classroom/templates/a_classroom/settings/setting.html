@@ -1,0 +1,59 @@
+{% extends 'a_classroom/base.html' %}
+{% block title %} Settings {% endblock %}
+{% block content %}
+<div class="flex items-center justify-center h-full w-full p-4">
+	<div id="parent-element" class="h-full w-[700px] bg-gray-100 border-2 border-black rounded p-4 shadow-xl overflow-auto">
+		<div class="flex items-center justify-center text-white bg-gray-800 rounded w-full">
+			<h2 class="p-4 text-3xl">Account Settings</h2>
+		</div>
+		<hr>
+
+		<div class="flex items-center justify-center py-4">
+			<img src="{{ user_profile.get_image_url }}" 
+            alt="Profile Image" class="rounded-circle shadow-lg h-[150px] w-[150px] object-cover border-2 border-solid border-black rounded-full m-2">
+		</div>
+
+		<div class="flex flex-col items-center justify-center w-full pt-3">
+			<label for="id_first_name" class="mb-2 text-1xl">First Name</label>
+			<input class="border border-solid border-gray-300 w-[50%] p-2 rounded bg-white" type="text" id="id_first_name" value="{{ user_profile.user.first_name }}" readonly>
+		</div>
+
+		<div class="flex flex-col items-center justify-center w-full pt-3">
+			<label for="id_last_name" class="mb-2 text-1x1">Last Name</label>
+			<input class="border border-solid border-gray-300 w-[50%] p-2 rounded bg-white" type="text" id="id_last_name" value="{{ user_profile.user.last_name }}" readonly>
+		</div>
+
+		<div class="flex flex-col items-center justify-center w-full pt-3">
+			<label for="id_email" class="mb-2 text-1x1">Email Address</label>
+			<input class="border border-solid border-gray-300 w-[50%] p-2 rounded bg-white" type="text" id="id_email" value="{{ email }}" readonly>
+		</div>
+
+		<div class="flex items-center justify-center w-full pt-5">
+		<button
+			class="flex items-center justify-center py-2 w-32 text-white bg-gray-800 cursor-pointer rounded hover:bg-gray-950"
+			id="upload-profile"
+			hx-get="{% url 'b_enrollment:upload-profile' %}"
+			hx-trigger="click"
+			hx-target="#parent-element"
+			hx-swap="innerHTML">Upload Profile</button>
+		</div>
+
+		<div class="flex items-center justify-center w-full pt-3">
+		<button
+			class="flex items-center justify-center py-2 w-32 text-white bg-gray-800 cursor-pointer rounded hover:bg-gray-950"
+			id="edit-account"
+			hx-get="{% url 'a_classroom:edit-account' %}"
+			hx-trigger="click"
+			hx-target="#parent-element"
+			hx-swap="innerHTML">Edit Account</button>
+		</div>
+
+		<form action="{% url 'logout' %}" method="post" class="flex items-center justify-center w-full pt-3">
+		{% csrf_token %}
+		<button type="submit" 
+			class="flex items-center justify-center py-2 w-32 bg-gray-500 cursor-pointer rounded transition-colors hover:bg-gray-650">
+			Logout
+		</button>
+		</form>
+</div>
+{% endblock %}

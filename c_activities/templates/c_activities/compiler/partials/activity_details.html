@@ -1,0 +1,65 @@
+<div class="flex items-center justify-center h-full w-full">
+    <div class="flex flex-col justify-start border border-gray-300 h-[100%] w-[100%] p-4 overflow-hidden">
+        <div class="h-full overflow-y-auto pr-2 leading-5">
+
+            <div class="pb-2">
+                <h4 class="font-bold">Title</h4>
+                <div class="bg-white border-2 border-solid rounded p-3 text-sm font-medium text-gray-800 sm:text-base max-h-80 overflow-y-auto scrollbar-hidden">{{ activity.title }}</div>
+            </div>
+
+            <div class="pb-2">
+                <h4 class="font-bold">Instruction</h4>
+                <div class="bg-white border-2 border-solid rounded p-3 text-sm font-medium text-gray-800 sm:text-base max-h-80 overflow-y-auto overflow-x-hidden text-justify">{{ activity.description }}</div>
+            </div>
+            
+            <div class="pb-2">
+                <h4 class="font-bold">Max Score</h4>
+                <div class="bg-white border-2 border-solid rounded p-3 text-sm font-medium text-gray-800 sm:text-base max-h-32 overflow-y-auto scrollbar-hidden">{{ activity.max_score }}</div>
+            </div>
+
+            <div class="pb-2">
+                <h4 class="font-bold">Language</h4>
+                <div class="bg-white border-2 border-solid rounded p-3 text-sm font-medium text-gray-800 sm:text-base max-h-32 overflow-y-auto scrollbar-hidden">{{ activity.language }}</div>
+            </div>
+
+            <div class="pb-2">
+                <h4 class="font-bold">Due</h4>
+                <div class="bg-white border-2 border-solid rounded p-3 text-sm font-medium text-gray-800 sm:text-base max-h-32 overflow-y-auto scrollbar-hidden">{{ activity.due_at }}</div>
+            </div>
+
+            {% if activity.type == "quiz" %}
+                <div class="pb-2">
+                    <h4 class="font-bold">Score</h4>
+                    <div class="bg-white border-2 border-solid rounded p-3 text-sm font-medium text-gray-800 sm:text-base max-h-32 overflow-y-auto scrollbar-hidden">
+                        {{ quiz_score }}
+                    </div>
+                </div>
+
+                <div class="pb-2">
+                    <h4 class="font-bold">Feedback</h4>
+                    <pre class="block border-2 border-solid mb-4 p-3 bg-gray-100 rounded max-h-32 overflow-y-auto whitespace-pre-wrap" style="scrollbar-gutter: stable; white-space: pre-line;">
+                        {{ quiz_feedback }}
+                    </pre>
+                </div>
+            {% endif %}
+
+            {% if activity.type == "activity" %}
+                <div class="pb-2">
+                    <h4 class="font-bold">Highest Score</h4>
+                    <div class="bg-white border-2 border-solid rounded p-3 text-sm font-medium text-gray-800 sm:text-base max-h-32 overflow-y-auto scrollbar-hidden">
+                        {{ highest_score }}
+                    </div>
+                </div>
+
+                {% if highest_returned_submission and highest_feedback %}
+                    <div class="pb-2">
+                        <h4 class="font-bold">Feedback on Highest Score</h4>
+                        <pre class="block mb-4 p-3 bg-gray-100 rounded max-h-32 overflow-y-auto whitespace-pre-wrap" style="scrollbar-gutter: stable; white-space: pre-line;">
+                            {{ highest_feedback }}
+                        </pre>
+                    </div>
+                {% endif %}
+            {% endif %}
+        </div>
+    </div>
+</div>

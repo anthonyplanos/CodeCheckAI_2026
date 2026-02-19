@@ -1,0 +1,8 @@
+<div hx-post="{% url 'a_classroom:create-subject' %}"
+     hx-trigger="load delay:0.5s"
+     hx-target="this"
+     hx-swap="outerHTML"
+     hx-vals='{"processing": "true", "action": "create_subject"}'>
+
+    <div>Creating subject...</div>
+</div>

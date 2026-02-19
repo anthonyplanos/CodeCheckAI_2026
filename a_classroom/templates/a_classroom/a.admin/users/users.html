@@ -1,0 +1,28 @@
+<table id="users-table" class="w-full border border-solid table-fixed">
+    <thead class="h-16 bg-gray-800 text-white">
+        <tr class="text-center">
+            <th class="border-r border-solid">Profile</th>
+            <th class="border-r border-solid">Email Address</th>
+            <th class="border-r border-solid">User Role</th>
+        </tr>
+    </thead>
+    <tbody class="flex-1">
+        {% for user in all_users %}
+            <tr class="grow text-center border border-solid h-20">
+                <td class="overflow-hidden">
+                    <img src="{{ user.userprofile.get_image_url }}"
+                        alt="Profile Image"
+                        class="flex rounded-circle shadow-lg h-10 w-10 object-cover border-2 border-solid border-blue-500 rounded-full m-2">
+                </td>
+                <td class="whitespace-nowrap overflow-hidden text-ellipsis">{{ user.email }}</td>
+                <td class="whitespace-nowrap overflow-hidden text-ellipsis">{{ user.userprofile.role }}</td>
+            </tr>
+        {% empty %}
+            <tr class="grow text-center h-20">
+                <td></td>
+                <td class="py-4 text-center">No user available.</td>
+                <td></td>
+            </tr>
+        {% endfor %}
+    </tbody>
+</table>

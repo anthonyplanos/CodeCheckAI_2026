@@ -1,0 +1,36 @@
+<form 
+  class="w-full"
+  hx-post="{% url 'c_activities:edit-insight' submission.id %}" 
+  hx-target="this"
+  hx-swap="outerHTML"
+>
+  {% csrf_token %}
+  <input type="hidden" name="subject_id" value="{{ submission.activity.subject.subject_id }}">
+  <input type="hidden" name="activity_id" value="{{ submission.activity.activity_id }}">
+  
+  <textarea 
+    name="new_insight"
+    class="border border-solid mt-2 p-3 bg-gray-100 rounded w-full h-32 resize-none overflow-y-auto"
+    required
+  >{{ submission.feedback }}</textarea>
+  
+  <div class="flex w-full space-x-2 mt-2">
+    <button 
+      type="submit" 
+      name="action" 
+      value="confirm"
+      class="py-1 px-2 text-white bg-gray-800 cursor-pointer rounded hover:bg-gray-950"
+    >
+      Confirm
+    </button>
+    
+    <button 
+      type="submit" 
+      name="action" 
+      value="cancel"
+      class="py-1 px-2 text-white bg-red-600 cursor-pointer rounded hover:bg-red-800"
+    >
+      Cancel
+    </button>
+  </div>
+</form>

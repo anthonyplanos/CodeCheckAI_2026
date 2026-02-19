@@ -1,0 +1,428 @@
+from django.shortcuts import render, get_object_or_404, redirect
+from django.views import View
+from django.http import JsonResponse, HttpResponse
+from django.urls import reverse
+from django.conf import settings
+from c_activities.views import evaluate_student_code_with_openai, evaluate_student_code_with_openai_for_playground, get_activity_examples, get_activity_criterias
+from c_activities.models import Activity, ActivitySubmission, ActivityExample
+from a_classroom.models import Subject
+from a_classroom.views import select_subject_by_id, select_activity_by_id, get_student_submission_by_id, get_submission_by_id
+from django.utils import timezone
+from django_user_agents.utils import get_user_agent
+from django.contrib import messages
+import concurrent.futures
+import requests
+import json
+import time
+import re
+
+# Create your views here.   
+
+class CompilerView(View):
+    def get(self, request):
+        user_agent = get_user_agent(request)
+        if user_agent.is_mobile or user_agent.is_tablet:
+            messages.warning(request, "This platform is optimized for desktop and laptop computers. Please use a PC or laptop for the best coding experience.")
+        return render(request, 'd_compiler/playground.html')
+    
+    def post(self, request):
+        a_type = request.POST.get("type")
+        action_type = request.POST.get("action")
+        code = request.POST.get("compiler")
+        subject_id = request.POST.get("subject_id")
+        activity_id = request.POST.get("activity_id")
+        submission_id = request.POST.get("submission_id")
+
+        if not request.POST.get("processing"):
+            return render(request, 'd_compiler/progress_bar.html')
+        else:
+            return self.process_run_code(request)
+
+    def process_run_code(self, request):
+        a_type = request.POST.get("type")
+        action_type = request.POST.get("action")
+        code = request.POST.get("compiler")
+        subject_id = request.POST.get("subject_id")
+        activity_id = request.POST.get("activity_id")
+        submission_id = request.POST.get("submission_id")
+
+        subject = None
+        activity = None
+        if a_type != "playground":
+            subject = select_subject_by_id(subject_id)
+            activity = select_activity_by_id(activity_id)
+            if not subject and not activity:
+                return redirect("a_classroom:index")
+
+        student = request.user
+
+        match action_type:
+            case "run_code":
+                language_id = request.POST.get("language_id")
+                try:
+                    language_id = int(language_id)
+                except (ValueError, TypeError):
+                    return HttpResponse("Invalid language ID", status=400)
+
+                if code.strip() == "":
+                    messages.error(request, "Code cannot be empty.")
+                    response = HttpResponse()
+                    response["HX-Redirect"] = reverse('a_classroom:v', args=[subject_id])
+                    return response
+
+                if language_id == 62:
+                    code = re.sub(r'^\s*package\s+.*;?\s*$', '', code, flags=re.MULTILINE)
+                    
+                    public_class_match = re.search(r'public\s+class\s+(\w+)', code)
+                    if public_class_match and public_class_match.group(1) != 'Main':
+                        old_class_name = public_class_match.group(1)
+                        code = code.replace(f'public class {old_class_name}', 'public class Main')
+                        code = code.replace(f'new {old_class_name}()', 'new Main()')
+                    
+                    if 'public static void main' not in code:
+                        if 'class ' in code:
+                            lines = code.split('\n')
+                            for i, line in enumerate(lines):
+                                if 'class ' in line and '{' in line:
+                                    lines.insert(i + 1, '    public static void main(String[] args) {')
+                                    lines.insert(i + 2, '        // Your code here')
+                                    lines.insert(i + 3, '    }')
+                                    code = '\n'.join(lines)
+                                    break
+
+                judge_payload = {
+                    "source_code": code,
+                    "language_id": language_id,
+                    "stdin": "",
+                }
+
+                if a_type == "activity":
+                    if code.strip() == "":
+                        response = HttpResponse()
+                        response["HX-Redirect"] = f"/c/activity/{activity_id}/?subject_id={subject_id}&type=activity"
+                        return response
+
+                    submission = ActivitySubmission.objects.create(
+                        student=student,
+                        activity=activity,
+                        submitted_code=code,
+                        saved_code="",
+                        status="In Progress"
+                    )
+                
+                try:
+                    response = requests.post(
+                        f"{settings.JUDGE0_URL}?base64_encoded=false&wait=false",
+                        headers=settings.HEADERS,
+                        json=judge_payload
+                    )
+                    response_data = response.json()
+                    token = response_data.get("token")
+
+                    if not token:
+                        return HttpResponse("Submission failed", status=500)
+
+                    result_url = f"{settings.JUDGE0_URL}/{token}/?base64_encoded=false"
+                    for _ in range(10):
+                        result_response = requests.get(result_url, headers=settings.HEADERS)
+                        result_data = result_response.json()
+
+                        if result_data["status"]["id"] in [1, 2]:
+                            time.sleep(1)
+                            continue
+
+                        stdout = result_data.get("stdout", "")
+                        stderr = result_data.get("stderr", "")
+                        compile_output = result_data.get("compile_output", "")
+                        message = result_data.get("message", "")
+                        status_description = result_data["status"]["description"]
+
+                        exec_time = result_data.get("time", "0")
+
+                        if a_type == "activity":
+                            instruction = activity.description
+                            examples = get_activity_examples(activity)
+                            criterias = get_activity_criterias(activity)
+
+                            ai_feedback = evaluate_student_code_with_openai(
+                                code=code,
+                                language=activity.language,
+                                instruction=instruction,
+                                examples=examples,
+                                criterias=criterias,
+                                max_score=activity.max_score,
+                            )
+
+                            score_match = re.search(r"Grading:\s*(\d+)", ai_feedback)
+                            score = int(score_match.group(1)) if score_match else 0
+
+                            sections = re.split(r'\*?\s*(?:Grading|Insight):\s*\*?\s*', ai_feedback)
+                            
+                            if len(sections) > 1:
+                                feedback_section = sections[-1].strip()
+                            else:
+                                feedback_section = re.sub(r'.*Grading:\s*\d+\s*', '', ai_feedback).strip()
+                            
+                            feedback_section = re.sub(r'\*\*', '', feedback_section).strip()
+
+                            if submission.score is None or score > submission.score:
+                                submission.score = score
+                                submission.feedback = feedback_section
+                                submission.save()
+
+                            output = f"""
+                            <div class="bg-white border border-gray-200 rounded-lg shadow overflow-hidden">
+                                <div class="p-4 md:p-6">
+                                    <div class="flex items-center justify-between mb-6">
+                                        <h3 class="text-sm text-gray-800">Activity Result</h3>
+                                        <div class="text-sm text-gray-800">
+                                            Score: <span class="text-sm text-blue-600">{score}</span>
+                                        </div>
+                                    </div>
+                                    
+                                    <div class="bg-gray-800 text-gray-100 rounded-lg p-4 mb-4">
+                                        <div class="flex items-center justify-between mb-2">
+                                            <h4 class="text-sm font-medium text-white">Program Output</h4>
+                                        </div>
+                                        <pre id="quiz-output-pre" class="mt-3 whitespace-pre-wrap text-sm bg-gray-900 text-green-300 font-medium sm:text-base rounded p-3 max-h-64 overflow-auto">{stdout or stderr or compile_output or message or status_description}</pre>
+                                    </div>
+                                    
+                                    <div class="flex items-center justify-between text-sm text-gray-600 mb-4">
+                                        <div class="flex items-center">
+                                            <span class="font-medium">Run Time:</span>
+                                            <span class="ml-1 font-semibold text-gray-800">{exec_time}</span>
+                                        </div>
+                                    </div>
+                                    
+                                    <div class="bg-gradient-to-br from-white to-gray-50 border border-gray-100 rounded-lg p-4">
+                                        <h4 class="text-sm font-semibold text-gray-800 mb-2">AI Feedback</h4>
+                                        <div class="text-sm text-gray-700 leading-relaxed" id="quiz-ai-feedback">
+                                            {feedback_section.replace('-', '<br>').replace('. ', '.<br>')}
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <style>
+                                #quiz-output-pre {{
+                                    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, "Roboto Mono", monospace;
+                                    font-size: 0.875rem;
+                                    line-height: 1.5;
+                                }}
+                                #quiz-ai-feedback br {{
+                                    margin-bottom: 0.5rem;
+                                    display: block;
+                                    content: "";
+                                }}
+                            </style>
+                            <script>
+                                setTimeout(() => {{
+                                    window.alert("You submitted an activity");
+                                }}, 1000);
+                            </script>
+                            """
+                        else:
+                            ai_feedback = evaluate_student_code_with_openai_for_playground(code=code)
+
+                            output = f"""
+                              <div class="bg-white border border-gray-200 rounded-lg shadow-lg overflow-hidden">
+                                <div class="p-4 md:p-6">
+                                  <div class="flex flex-col gap-4">
+                                    <div class="w-full">
+                                      <div class="bg-gray-800 font-medium text-gray-800 sm:text-base rounded-md p-3">
+                                        <div class="flex items-center justify-between">
+                                          <h3 class="text-sm font-medium text-white">Program Output</h3>
+                                        </div>
+                                        <pre id="output-pre" class="mt-3 whitespace-pre-wrap text-sm bg-gray-900 text-green-300 font-medium sm:text-base rounded p-3 max-h-64 overflow-auto">{stdout or stderr or compile_output or message or status_description}</pre>
+                                      </div>
+
+                                      <div class="mt-3 flex items-center justify-between text-sm font-medium text-gray-800 sm:text-base">
+                                        <div>⏱<span class="font-medium text-gray-800 sm:text-base">Run Time:</span> <span class="ml-1 inline-block">{exec_time}</span></div>
+                                        <div class="text-right">Status: <span class="font-medium text-gray-800 sm:text-base">{status_description}</span></div>
+                                      </div>
+                                    </div>
+
+                                    <div class="w-full">
+                                      <div class="h-full bg-gradient-to-br from-white to-gray-50 border border-gray-100 rounded-md p-3">
+                                        <h3 class="text-sm font-medium text-gray-800 sm:text-base">AI Feedback</h3>
+                                        <div class="mt-2 text-sm font-medium text-gray-800 sm:text-base space-y-2 leading-relaxed" id="ai-feedback">{ai_feedback.replace('-', '<br>')}</div>
+                                      </div>
+                                    </div>
+                                  </div>
+                                </div>
+                              </div>
+
+                              <style>
+                                /* small helpers to ensure nice scrollbars and wrapping */
+                                #output-pre {{ font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, "Roboto Mono", monospace; }}
+                                .copy-btn {{ cursor: pointer; }}
+                              </style>
+                            """.replace(":", "<br>").replace(".", "<br>")
+                        
+
+                        return HttpResponse(output, content_type="text/html")
+
+                    return HttpResponse("Timeout retrieving result", status=500)
+
+                except requests.RequestException as e:
+                    return HttpResponse(f"Judge0 server error: {str(e)}", status=500)
+            case _:
+                return HttpResponse("Invalid action", status=400)
+
+
+class TurnInView(View):
+  def post(self, request):
+      if not request.POST.get("processing"):
+          return render(request, 'c_activities/compiler/partials/turn_in_progress_bar.html')
+      else:
+          return self.process_turn_in(request)
+
+  def process_turn_in(self, request):
+      a_type = request.GET.get("type")
+      code = request.POST.get("compiler")
+      subject_id = request.POST.get("subject_id")
+      activity_id = request.POST.get("activity_id")
+
+      subject = None
+      activity = None
+      subject = select_subject_by_id(subject_id)
+      activity = select_activity_by_id(activity_id)
+      if not subject and not activity:
+          return redirect("a_classroom:index")
+
+      student = request.user
+
+      if not code or code.strip() == "":
+          messages.error(request, "Cannot submit empty code.")
+          response = HttpResponse()
+          response["HX-Redirect"] = f"/c/activity/{activity_id}/?subject_id={subject_id}&type=activity"
+          return response
+
+      submission = get_student_submission_by_id(student, activity)
+      
+      if submission and submission.status == "submitted":
+          messages.error(request, "You have already submitted this activity.")
+          response = HttpResponse()
+          response["HX-Redirect"] = f"/c/activity/{activity_id}/?subject_id={subject_id}&type=activity"
+          return response
+
+      instruction = activity.description
+      language = activity.language
+      examples = get_activity_examples(activity)
+      criterias = get_activity_criterias(activity)
+
+      evaluate = evaluate_student_code_with_openai(code, language, instruction, examples, criterias, activity.max_score)
+
+      parts = evaluate.split("<grading>")
+      raw_grading = parts[0]
+      match = re.search(r"(\d+(?:\.\d+)?)", raw_grading)
+      score = float(match.group(1)) if match else 0
+      feedback = re.sub(r"Grading:.*?Insight:\s*", "", raw_grading, flags=re.DOTALL).strip()
+
+      if submission:
+          submission.submitted_code = code
+          submission.submitted_at = timezone.now()
+          submission.feedback = feedback
+          submission.score = score
+          submission.status = "submitted"
+          submission.evaluator = "OpenAI"
+          submission.save()
+      else:
+          submission = ActivitySubmission.objects.create(
+              student=student,
+              activity=activity,
+              submitted_code=code,
+              submitted_at=timezone.now(),
+              feedback=feedback,
+              score=score,
+              status="submitted",
+              evaluator="OpenAI"
+          )
+
+      response = HttpResponse()
+      response["HX-Redirect"] = f"/c/activity/{activity_id}/?subject_id={subject_id}&type=activity"
+      return response
+
+class SaveDraftView(View):
+    def post(self, request):
+        if not request.POST.get("processing"):
+            return render(request, 'c_activities/compiler/partials/save_draft_progress_bar.html')
+        else:
+            return self.process_save_draft(request)
+
+    def process_save_draft(self, request):
+        code = request.POST.get("compiler")
+        subject_id = request.POST.get("subject_id")
+        activity_id = request.POST.get("activity_id")
+        submission_id = request.POST.get("submission_id")
+
+        student = request.user
+
+        subject = None
+        activity = None
+        subject = select_subject_by_id(subject_id)
+        activity = select_activity_by_id(activity_id)
+        if not subject and not activity:
+            return redirect("a_classroom:index")
+
+        existing = get_student_submission_by_id(student, activity)
+        
+        if existing and existing.status == "submitted":
+            messages.error(request, "You have already submitted this activity.")
+            response = HttpResponse()
+            response["HX-Redirect"] = f"/c/activity/{activity_id}/?subject_id={subject_id}&type=activity"
+            return response
+        
+        submission, created = ActivitySubmission.objects.update_or_create(
+            student=student,
+            activity=activity,
+            defaults={
+                "saved_code": code,
+                "status": "in_progress"
+            }			
+        )
+        
+        if created:
+            messages.success(request, "Draft saved successfully!")
+        else:
+            messages.success(request, "Draft updated successfully!")
+        
+        response = HttpResponse()
+        response["HX-Redirect"] = f"/c/activity/{activity_id}/?subject_id={subject_id}&type=activity"
+        return response
+
+class UnsubmitView(View):
+  def post(self, request):
+      if not request.POST.get("processing"):
+          return render(request, 'c_activities/compiler/partials/unsubmit_progress_bar.html')
+      else:
+          return self.process_unsubmit(request)
+
+  def process_unsubmit(self, request):
+      subject_id = request.POST.get("subject_id")
+      activity_id = request.POST.get("activity_id")
+      submission_id = request.POST.get("submission_id")
+
+      subject = None
+      activity = None
+      subject = select_subject_by_id(subject_id)
+      activity = select_activity_by_id(activity_id)
+      if not subject and not activity:
+          return redirect("a_classroom:index")
+
+      student = request.user
+
+      submission = get_submission_by_id(submission_id)
+      if not submission:
+          response = HttpResponse()
+          response["HX-Redirect"] = f"/c/activity/{activity_id}/?subject_id={subject_id}&type=activity"
+          return response
+
+      if submission.submitted_code:
+          submission.saved_code = submission.submitted_code
+      submission.status = "in_progress"
+      submission.save()
+      
+      response = HttpResponse()
+      response["HX-Redirect"] = f"/c/activity/{activity_id}/?subject_id={subject_id}&type=activity"
+      return response
